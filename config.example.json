@@ -1,0 +1,27 @@
+{
+  "fingerprint": true,
+
+  "sinkhole": {
+    "enabled": false,
+    "upstream": "1.1.1.1",
+    "port": 53,
+    "_comment": "Pi-hole-style domain blocking. Needs 'pip install dnslib', sudo (port 53), and your router DHCP DNS pointed at this machine. Blocked domains then return NXDOMAIN network-wide."
+  },
+
+  "firewall": {
+    "enabled": false,
+    "_comment": "macOS pf IP blocking. OFF by default. When true AND running as root, the dashboard can add/remove block rules inside a dedicated 'homescope' pf anchor (reversible via panic flush). pf only filters THIS Mac unless it is your gateway."
+  },
+
+  "alerts": {
+    "threshold_bps": 0,
+    "_comment": "Alert when a device exceeds this many bytes/sec (0 = off). Also alerts on new devices and queries to blocked domains."
+  },
+
+  "snmp": {
+    "enabled": false,
+    "host": "192.168.1.1",
+    "community": "public",
+    "version": "2c"
+  }
+}
