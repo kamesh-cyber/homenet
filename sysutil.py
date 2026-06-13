@@ -82,3 +82,16 @@ def capture_tool():
         if shutil.which(tool):
             return tool
     return None
+
+
+def has_scapy():
+    """True if the scapy library is importable (pure-Python capture backend).
+
+    On Windows scapy still needs the Npcap driver installed to actually sniff;
+    importing it here only tells us the Python package is present.
+    """
+    try:
+        import scapy  # noqa: F401
+        return True
+    except Exception:
+        return False

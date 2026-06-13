@@ -1,4 +1,22 @@
+# ─── Core (required) ──────────────────────────────────────────────────────
 fastapi>=0.110
-uvicorn[standard]>=0.29
-psutil>=5.9
-zeroconf>=0.131    # optional: mDNS/Bonjour device names + types
+uvicorn[standard]>=0.29     # ASGI server + WebSocket support for the dashboard
+psutil>=5.9                 # network interfaces + local bandwidth counters
+
+# ─── Feature dependencies (all pip-installable) ───────────────────────────
+zeroconf>=0.131             # mDNS/Bonjour: friendly device names + device types
+dnslib>=0.9.24              # DNS sinkhole = domain blocking (needs admin to bind :53)
+scapy>=2.5.0                # packet capture: per-device traffic + passive DNS log
+
+# ─── Native components pip CANNOT install (install separately if needed) ───
+# Packet capture (the `cap` + `dns` features) needs a libpcap/Npcap driver,
+# which is a kernel component — pip only installs Python packages, so this
+# MUST be installed by hand:
+#   Windows : install Npcap  ->  https://npcap.com   (enable "WinPcap API-compatible")
+#   macOS   : already built in (libpcap + tcpdump ship with the OS)
+#   Linux   : already built in (apt install libpcap0.8 if missing)
+#
+# SNMP per-port counters (optional) use the net-snmp command-line tools:
+#   Windows : install Net-SNMP and add it to PATH  ->  https://www.net-snmp.org
+#   macOS   : brew install net-snmp
+#   Linux   : apt install snmp

@@ -29,6 +29,10 @@ BLOCK_FILE = os.path.join(STATE_DIR, "blocked_domains.json")
 
 DOMAIN_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+# DNS numeric qtype -> label (for the scapy backend)
+DNS_QTYPES = {1: "A", 28: "AAAA", 5: "CNAME", 15: "MX", 16: "TXT", 2: "NS",
+              12: "PTR", 6: "SOA", 33: "SRV", 65: "HTTPS", 64: "SVCB"}
+
 
 def valid_domain(d):
     return bool(d) and len(d) <= 253 and bool(DOMAIN_RE.match(d))
@@ -151,8 +155,10 @@ class DNSWatch:
     def __init__(self, intel, blocklist, history=300):
         self.intel = intel
         self.blocklist = blocklist
-        self.tool = sysutil.capture_tool()
-        self.available = self.tool is not None
+        self.cli_tool = sysutil.capture_tool()
+        self.have_scapy = sysutil.has_scapy()
+        self.method = "cli" if self.cli_tool else ("scapy" if self.have_scapy else None)
+        self.available = self.method is not None
         self.reason = self._reason()
         self.events = deque(maxlen=history)
         self.qtypes = Counter()
@@ -163,9 +169,10 @@ class DNSWatch:
         self.total = 0
 
     def _reason(self):
-        if not self.tool:
-            return ("tcpdump missing" if not sysutil.IS_WINDOWS
-                    else "WinDump/tcpdump missing (install Npcap + WinDump)")
+        if not self.method:
+            if sysutil.IS_WINDOWS:
+                return "no DNS-capture backend — pip install scapy + Npcap"
+            return "no DNS-capture backend — install tcpdump or `pip install scapy`"
         if not sysutil.is_admin():
             return f"{sysutil.admin_hint()} for DNS capture"
         return "active"
@@ -173,13 +180,14 @@ class DNSWatch:
     def start(self):
         if not self.available or not sysutil.is_admin():
             return
-        threading.Thread(target=self._run, daemon=True).start()
+        target = self._run_scapy if self.method == "scapy" else self._run_cli
+        threading.Thread(target=target, daemon=True).start()
 
-    def _run(self):
+    def _run_cli(self):
         import discovery
         nets = discovery.local_networks()
         iface = nets[0][0] if nets else None
-        cmd = [self.tool, "-l", "-n", "-tt"]
+        cmd = [self.cli_tool, "-l", "-n", "-tt"]
         if iface:
             cmd += ["-i", iface]
         cmd += ["port", "53"]
@@ -188,13 +196,103 @@ class DNSWatch:
                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
         except Exception as e:
             self.available = False
-            self.reason = f"{self.tool} failed: {e}"
+            self.reason = f"{self.cli_tool} failed: {e}"
             return
         for line in proc.stdout:
             try:
                 self.feed_line(line)
             except Exception:
                 pass
+
+    def _run_scapy(self):
+        """Pure-Python DNS capture via scapy (libpcap/Npcap). Cross-platform."""
+        try:
+            from scapy.all import sniff
+        except Exception as e:
+            self.available = False
+            self.reason = f"scapy import failed: {e}"
+            return
+        import discovery
+        nets = discovery.local_networks()
+        iface = nets[0][0] if nets else None
+
+        def handler(pkt):
+            try:
+                self.feed_packet(pkt)
+            except Exception:
+                pass
+        try:
+            sniff(iface=iface, prn=handler, store=False, filter="port 53")
+        except Exception:
+            try:
+                sniff(prn=handler, store=False, filter="port 53")
+            except Exception as e:
+                self.available = False
+                self.reason = f"scapy sniff failed: {e}"
+
+    def feed_packet(self, pkt):
+        """Parse a scapy DNS packet into the same intel/events the CLI path feeds."""
+        from scapy.layers.dns import DNS
+        from scapy.layers.inet import IP, UDP, TCP
+        try:
+            from scapy.layers.inet6 import IPv6
+        except Exception:
+            IPv6 = None
+        if not pkt.haslayer(DNS):
+            return
+        dns = pkt.getlayer(DNS)
+        sip = dip = sport = dport = None
+        if pkt.haslayer(IP):
+            sip, dip = pkt[IP].src, pkt[IP].dst
+        elif IPv6 is not None and pkt.haslayer(IPv6):
+            sip, dip = pkt[IPv6].src, pkt[IPv6].dst
+        if pkt.haslayer(UDP):
+            sport, dport = pkt[UDP].sport, pkt[UDP].dport
+        elif pkt.haslayer(TCP):
+            sport, dport = pkt[TCP].sport, pkt[TCP].dport
+        # the side whose port is not 53 is the asking device
+        client = sip if dport == 53 else (dip if sport == 53 else sip)
+        qid = str(int(getattr(dns, "id", 0)))
+
+        if int(getattr(dns, "qr", 0)) == 0 and getattr(dns, "qd", None) is not None:
+            qd = dns.qd
+            try:
+                qname = qd.qname.decode("utf-8", "ignore")
+            except Exception:
+                qname = str(qd.qname)
+            domain = qname.rstrip(".").lower()
+            qtype = DNS_QTYPES.get(int(getattr(qd, "qtype", 0)),
+                                   str(getattr(qd, "qtype", "")))
+            blocked = self.blocklist.is_blocked(domain)
+            with self.lock:
+                self.total += 1
+                self.qtypes[qtype] += 1
+                if client:
+                    self.clients[client] += 1
+                self.pending[qid] = (domain, client, time.time())
+                if len(self.pending) > 4000:
+                    self.pending.clear()
+                if blocked:
+                    self.blocked_hits[domain] += 1
+                self.events.appendleft({"t": time.time(), "qtype": qtype,
+                                        "domain": domain, "client": client,
+                                        "blocked": blocked})
+            return
+        # answer -> map A/AAAA records back to the pending query's domain
+        ips = []
+        try:
+            an = dns.an
+            for i in range(int(getattr(dns, "ancount", 0) or 0)):
+                rr = an[i]
+                if int(rr.type) in (1, 28):
+                    ips.append(str(rr.rdata))
+        except Exception:
+            pass
+        with self.lock:
+            pend = self.pending.get(qid)
+        if pend and ips:
+            domain, qclient, _ = pend
+            self.intel.learn(domain, ips, qclient or client)
 
     def _client_of(self, line):
         m = self.PAIR_RE.search(line)

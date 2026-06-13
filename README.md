@@ -91,10 +91,11 @@ devices send their DNS queries directly to it once you set it as their resolver.
 ## Firewall setup
 
 ### Domain blocking (recommended — works network-wide)
-1. `pip install dnslib`
+1. `dnslib` is already in `requirements.txt` (no extra install).
 2. In `config.json`: `"sinkhole": { "enabled": true, "upstream": "1.1.1.1", "port": 53 }`
-3. Run `sudo python app.py` (port 53 needs root).
-4. On your **router**, set the DHCP DNS server to this Mac's IP.
+3. Run privileged so it can bind port 53: `sudo python app.py` (macOS/Linux) or
+   `py app.py` from an **Administrator** terminal (Windows).
+4. On your **router**, set the DHCP DNS server to this machine's IP.
 5. Block domains from the dashboard (Firewall panel, or the "block" link on any
    DNS query). Blocked domains return NXDOMAIN for every device.
 
@@ -172,16 +173,25 @@ Runtime state (outside the project, in your home dir): `~/.netscope/` holds
 
 ---
 
-## Optional dependencies
-- `zeroconf` (in requirements) — mDNS/Bonjour device names + types
-- `dnslib` — only if you enable the DNS sinkhole: `pip install dnslib`
-- `net-snmp` — only if you enable SNMP: macOS `brew install net-snmp`, Linux
-  `apt install snmp`, Windows: install the Net-SNMP binaries and put them on PATH
-- **Packet capture** (per-device traffic + passive DNS log) needs a libpcap CLI:
-  macOS/Linux ship `tcpdump`; on Windows install **[Npcap](https://npcap.com)**
-  plus **WinDump** and ensure `WinDump.exe` is on PATH. Without it, discovery,
-  presence, the DNS sinkhole, SNMP and firewalling all still work — only the
-  passive sniffer features are skipped.
+## Dependencies
+
+Everything pip can install is in `requirements.txt` — `pip install -r requirements.txt`
+covers the dashboard, mDNS naming, the DNS sinkhole (`dnslib`) and packet
+capture (`scapy`). Two features rely on **native** components pip cannot install:
+
+- **Packet capture** (per-device traffic + passive DNS log) needs a libpcap
+  driver under scapy:
+  - **macOS / Linux** — already built in (also ship `tcpdump`). Nothing to do.
+  - **Windows** — install **[Npcap](https://npcap.com)** once (a kernel driver;
+    no pip package can install it). After that, `scapy` captures directly — you
+    do *not* need WinDump. A CLI `tcpdump`/`WinDump` on PATH is still used in
+    preference if present.
+- **SNMP** per-port counters (optional) use the net-snmp CLI: macOS
+  `brew install net-snmp`, Linux `apt install snmp`, Windows install the
+  [Net-SNMP](https://www.net-snmp.org) binaries and add them to PATH.
+
+Without the native bits, discovery, presence, the DNS sinkhole and firewalling
+all still work — only the affected feature is skipped, and the dashboard says so.
 
 ## Platform notes
 - **Privileges** — features that need elevation light up automatically when you

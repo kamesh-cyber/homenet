@@ -69,8 +69,11 @@ class CaptureEngine:
     def __init__(self, tracker, intel=None):
         self.tracker = tracker
         self.intel = intel
-        self.tool = sysutil.capture_tool()
-        self.available = self.tool is not None
+        self.cli_tool = sysutil.capture_tool()
+        self.have_scapy = sysutil.has_scapy()
+        # Prefer a CLI sniffer when present (proven path); else use scapy.
+        self.method = "cli" if self.cli_tool else ("scapy" if self.have_scapy else None)
+        self.available = self.method is not None
         self.reason = self._reason()
         self.counters = defaultdict(DeviceCounters)
         self.lock = threading.Lock()
@@ -81,9 +84,10 @@ class CaptureEngine:
         self.global_dests = Counter()
 
     def _reason(self):
-        if not self.tool:
-            return ("tcpdump not found." if not sysutil.IS_WINDOWS
-                    else "WinDump/tcpdump not found (install Npcap + WinDump).")
+        if not self.method:
+            if sysutil.IS_WINDOWS:
+                return "no capture backend — pip install scapy and install Npcap (https://npcap.com)."
+            return "no capture backend — install tcpdump or `pip install scapy`."
         if not sysutil.is_admin():
             return f"{sysutil.admin_hint().capitalize()} to capture per-device traffic."
         return "active"
@@ -104,12 +108,13 @@ class CaptureEngine:
     def start(self):
         if not self.available or not sysutil.is_admin():
             return
-        threading.Thread(target=self._run, daemon=True).start()
+        target = self._run_scapy if self.method == "scapy" else self._run_cli
+        threading.Thread(target=target, daemon=True).start()
         threading.Thread(target=self._rate_loop, daemon=True).start()
 
-    def _run(self):
+    def _run_cli(self):
         iface = self._iface()
-        cmd = [self.tool, "-n", "-e", "-tt", "-l", "-q"]
+        cmd = [self.cli_tool, "-n", "-e", "-tt", "-l", "-q"]
         if iface:
             cmd += ["-i", iface]
         cmd += ["ip", "or", "ip6", "or", "arp"]
@@ -117,7 +122,7 @@ class CaptureEngine:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
         except Exception as e:
-            self.reason = f"{self.tool} failed: {e}"
+            self.reason = f"{self.cli_tool} failed: {e}"
             self.available = False
             return
         for line in proc.stdout:
@@ -125,6 +130,75 @@ class CaptureEngine:
                 self._parse(line)
             except Exception:
                 pass
+
+    def _run_scapy(self):
+        """Pure-Python capture via scapy (libpcap/Npcap). Cross-platform."""
+        try:
+            from scapy.all import sniff
+        except Exception as e:
+            self.available = False
+            self.reason = f"scapy import failed: {e}"
+            return
+        iface = self._iface()
+        try:
+            sniff(iface=iface, prn=self._handle_pkt, store=False,
+                  filter="ip or ip6 or arp")
+        except Exception:
+            # iface name scapy doesn't recognize -> fall back to its default
+            try:
+                sniff(prn=self._handle_pkt, store=False, filter="ip or ip6 or arp")
+            except Exception as e:
+                self.available = False
+                self.reason = f"scapy sniff failed: {e}"
+
+    def _handle_pkt(self, pkt):
+        try:
+            from scapy.layers.inet import IP, TCP, UDP, ICMP
+            from scapy.layers.inet6 import IPv6
+            from scapy.layers.l2 import ARP
+            length = len(pkt)
+            src = dst = sport = dport = None
+            proto = "other"
+            if pkt.haslayer(IP):
+                ln = pkt.getlayer(IP); src, dst = ln.src, ln.dst
+            elif pkt.haslayer(IPv6):
+                ln = pkt.getlayer(IPv6); src, dst = ln.src, ln.dst
+            elif pkt.haslayer(ARP):
+                a = pkt.getlayer(ARP); src, dst, proto = a.psrc, a.pdst, "ARP"
+            else:
+                return
+            if pkt.haslayer(TCP):
+                t = pkt.getlayer(TCP); sport, dport, proto = t.sport, t.dport, "TCP"
+            elif pkt.haslayer(UDP):
+                u = pkt.getlayer(UDP); sport, dport, proto = u.sport, u.dport, "UDP"
+            elif pkt.haslayer(ICMP):
+                proto = "ICMP"
+            proto = self._proto_name(sport, dport, proto)
+            self._ingest(src, str(sport) if sport is not None else None,
+                         dst, str(dport) if dport is not None else None,
+                         proto, length)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _proto_name(sport, dport, transport):
+        """Match classify(): prefer a well-known port label, else transport."""
+        for p in (dport, sport):
+            try:
+                if p is not None and int(p) in PORT_PROTO:
+                    return PORT_PROTO[int(p)]
+            except (ValueError, TypeError):
+                pass
+        return transport
+
+    def _ingest(self, src, sport, dst, dport, proto, length):
+        """Shared accounting for both the CLI and scapy capture backends."""
+        with self.lock:
+            self.total_bytes += length
+            if src and self._is_local(src):
+                self._account(src, dst, dport, proto, length, "tx")
+            if dst and self._is_local(dst):
+                self._account(dst, src, sport, proto, length, "rx")
 
     def _account(self, dev_ip, remote_ip, rport, proto, length, direction):
         c = self.counters[dev_ip]
@@ -161,12 +235,7 @@ class CaptureEngine:
             return
         src, sport, dst, dport = ipm.group(1), ipm.group(2), ipm.group(3), ipm.group(4)
         proto = classify(rest)
-        with self.lock:
-            self.total_bytes += length
-            if self._is_local(src):
-                self._account(src, dst, dport, proto, length, "tx")
-            if self._is_local(dst):
-                self._account(dst, src, sport, proto, length, "rx")
+        self._ingest(src, sport, dst, dport, proto, length)
 
     def _rate_loop(self):
         while True:
