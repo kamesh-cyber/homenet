@@ -26,7 +26,20 @@ sudo python app.py       # + per-device traffic + domain intel + DNS log + firew
 
 **Windows — one click (recommended)**
 
-Double-click **`setup.bat`** (or run `powershell -ExecutionPolicy Bypass -File .\setup.ps1`).
+Double-click **`setup.bat`**, or run this in PowerShell from the project folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+#   add -WithSnmp only if you use SNMPv3:
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -WithSnmp
+#   set up everything but don't launch:
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -NoRun
+```
+
+> The `-ExecutionPolicy Bypass` is required because Windows blocks unsigned
+> scripts by default; it applies only to this one run and changes nothing
+> system-wide.
+
 It does everything automatically: asks for Administrator rights, creates the
 venv, `pip install`s all dependencies, **downloads and installs the Npcap
 capture driver**, and starts the dashboard. (SNMP v1/v2c needs nothing extra;
