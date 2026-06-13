@@ -126,7 +126,7 @@ def sampler_loop():
                     "root": IS_ROOT,
                     "capture": cap.available and IS_ROOT,
                     "capture_reason": cap.reason,
-                    "dns": dnswatch.available,
+                    "dns": dnswatch.available and IS_ROOT,
                     "dns_reason": dnswatch.reason,
                     "mdns": tracker.mdns.ok,
                     "sinkhole": sinkhole.status,

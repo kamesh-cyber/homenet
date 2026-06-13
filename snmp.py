@@ -26,6 +26,7 @@ import threading
 import time
 
 import sysutil
+import snmp_client
 
 OID_IFDESCR = "1.3.6.1.2.1.2.2.1.2"
 OID_IN_HC = "1.3.6.1.2.1.31.1.1.1.6"      # ifHCInOctets (64-bit)
@@ -42,6 +43,13 @@ class SNMPPoller:
         self.community = cfg.get("community", "public")
         self.version = str(cfg.get("version", "2c"))
         self.have_tools = shutil.which("snmpwalk") is not None
+        # v1/v2c use the built-in pure-Python client (no native tools needed);
+        # v3 needs the net-snmp CLI for its crypto.
+        self._v3 = self.version.lower().lstrip("v") == "3"
+        if self._v3:
+            self.method = "cli" if self.have_tools else None
+        else:
+            self.method = "builtin"
         self.lock = threading.Lock()
         self.ports = {}              # ifIndex -> {name, in, out, in_bps, out_bps}
         self.prev = {}
@@ -51,19 +59,20 @@ class SNMPPoller:
     def _status(self):
         if not self.enabled:
             return "disabled"
-        if not self.have_tools:
-            if sysutil.IS_WINDOWS:
-                hint = "install Net-SNMP and add it to PATH"
-            elif sysutil.IS_MACOS:
-                hint = "brew install net-snmp"
-            else:
-                hint = "apt install snmp"
-            return f"net-snmp tools not installed ({hint})"
         if not self.host:
             return "no host configured"
+        if self.method is None:        # only happens for v3 without the CLI
+            return "SNMPv3 needs the net-snmp CLI (install net-snmp)"
         return "active"
 
     def _walk(self, oid):
+        if self.method == "builtin":
+            try:
+                return snmp_client.walk(self.host, self.community, oid,
+                                        version=self.version)
+            except Exception:
+                return {}
+        # CLI fallback (SNMPv3)
         cmd = ["snmpwalk", f"-v{self.version}", "-c", self.community,
                "-Oqn", "-t", "2", "-r", "1", self.host, oid]
         try:

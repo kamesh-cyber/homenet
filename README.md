@@ -24,22 +24,34 @@ python app.py            # device map + presence + this-host scope
 sudo python app.py       # + per-device traffic + domain intel + DNS log + firewall
 ```
 
-**Windows** (PowerShell)
+**Windows — one click (recommended)**
+
+Double-click **`setup.bat`** (or run `powershell -ExecutionPolicy Bypass -File .\setup.ps1`).
+It does everything automatically: asks for Administrator rights, creates the
+venv, `pip install`s all dependencies, **downloads and installs the Npcap
+capture driver**, and starts the dashboard. (SNMP v1/v2c needs nothing extra;
+add `-WithSnmp` only if you use SNMPv3, which needs the net-snmp CLI.)
+
+**Windows — manual**
 ```powershell
 cd homenet
 py -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-py app.py                # device map + presence + this-host scope
-#   — or, for the full picture, from an *Administrator* terminal —
-py app.py                # + DNS sinkhole + Windows-Firewall IP blocking
+# install Npcap once (capture driver, not pip-installable): https://npcap.com
+# then, from an *Administrator* PowerShell:
+py app.py
 ```
 
 Open **http://127.0.0.1:8788**.
 
 > Where macOS/Linux say "run with `sudo`", Windows means "run from an
 > **Administrator** terminal". HomeScope detects elevation automatically and the
-> dashboard shows what each privilege level unlocks.
+> dashboard shows what each privilege level unlocks. The `setup.ps1` installer
+> handles the elevation for you.
+>
+> **Why isn't Npcap in `requirements.txt`?** `requirements.txt` is for pip, which
+> only installs Python packages. Npcap is a Windows **kernel driver** and net-snmp
+> is a native binary — neither can come from pip. `setup.ps1` installs them for you.
 
 > If you saw `No supported WebSocket library detected`, the dashboard can't get
 > live data. Fix: `pip install 'uvicorn[standard]'` (the quotes matter in zsh),
@@ -125,7 +137,7 @@ Copy `config.example.json` to `config.json`. Sections:
 - `sinkhole` — DNS domain-blocking server (see above)
 - `firewall` — pf IP blocking (see above)
 - `alerts.threshold_bps` — per-device bandwidth alert (bytes/sec; 0 = off)
-- `snmp` — router/switch per-port polling (`brew install net-snmp`)
+- `snmp` — router/switch per-port polling (pure-Python v1/v2c; v3 needs net-snmp CLI)
 
 Env: `HOMESCOPE_HOST` (default `127.0.0.1`), `HOMESCOPE_PORT` (default `8788`).
 
@@ -186,12 +198,14 @@ capture (`scapy`). Two features rely on **native** components pip cannot install
     no pip package can install it). After that, `scapy` captures directly — you
     do *not* need WinDump. A CLI `tcpdump`/`WinDump` on PATH is still used in
     preference if present.
-- **SNMP** per-port counters (optional) use the net-snmp CLI: macOS
-  `brew install net-snmp`, Linux `apt install snmp`, Windows install the
-  [Net-SNMP](https://www.net-snmp.org) binaries and add them to PATH.
+- **SNMP** per-port counters work out of the box — HomeScope speaks SNMP v1/v2c
+  in pure Python ([snmp_client.py](snmp_client.py)), so no net-snmp tools are
+  needed. (Only SNMPv3, with its auth/priv crypto, falls back to the net-snmp
+  CLI — install it separately if you specifically use v3.)
 
-Without the native bits, discovery, presence, the DNS sinkhole and firewalling
-all still work — only the affected feature is skipped, and the dashboard says so.
+Without the native capture driver, discovery, presence, the DNS sinkhole, SNMP
+and firewalling all still work — only packet capture is skipped, and the
+dashboard says so.
 
 ## Platform notes
 - **Privileges** — features that need elevation light up automatically when you

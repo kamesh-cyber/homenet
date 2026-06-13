@@ -8,15 +8,14 @@ zeroconf>=0.131             # mDNS/Bonjour: friendly device names + device types
 dnslib>=0.9.24              # DNS sinkhole = domain blocking (needs admin to bind :53)
 scapy>=2.5.0                # packet capture: per-device traffic + passive DNS log
 
-# ─── Native components pip CANNOT install (install separately if needed) ───
+# SNMP (per-port router counters) is pure-Python here (see snmp_client.py) for
+# v1/v2c — no net-snmp tools needed. Only SNMPv3 (auth/priv crypto) falls back to
+# the net-snmp CLI, which you'd install separately if you actually use v3.
+
+# ─── The ONE native component pip CANNOT install ──────────────────────────
 # Packet capture (the `cap` + `dns` features) needs a libpcap/Npcap driver,
-# which is a kernel component — pip only installs Python packages, so this
-# MUST be installed by hand:
+# a kernel component — pip only installs Python packages, so install it once:
 #   Windows : install Npcap  ->  https://npcap.com   (enable "WinPcap API-compatible")
+#             (the setup.ps1 / setup.bat installer does this for you automatically)
 #   macOS   : already built in (libpcap + tcpdump ship with the OS)
 #   Linux   : already built in (apt install libpcap0.8 if missing)
-#
-# SNMP per-port counters (optional) use the net-snmp command-line tools:
-#   Windows : install Net-SNMP and add it to PATH  ->  https://www.net-snmp.org
-#   macOS   : brew install net-snmp
-#   Linux   : apt install snmp
